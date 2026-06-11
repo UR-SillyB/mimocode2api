@@ -15,5 +15,5 @@ Thumbs.db
 # Docker
 .env
 
-# Analysis source
-MiMo-Code/
+# Docs (internal reference only)
+analysis/

@@ -2,10 +2,11 @@
 <h3 align="center">OpenAI-Compatible API Gateway for MiMo Language Models</h3>
 
 <p align="center">
-  <a href="https://github.com/Sliverkiss/mimocode2api/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/Sliverkiss/mimocode2api?color=yellow&logo=riseup&logoColor=yellow&style=flat-square"></a>
-  <a href="https://github.com/Sliverkiss/mimocode2api/network/members"><img alt="GitHub forks" src="https://img.shields.io/github/forks/Sliverkiss/mimocode2api?color=orange&style=flat-square"></a>
-  <a href="https://github.com/Sliverkiss/mimocode2api/issues"><img alt="GitHub issues" src="https://img.shields.io/github/issues/Sliverkiss/mimocode2api?color=red&style=flat-square"></a>
-  <a href="https://t.me/sliverkiss_blog"><img alt="Telegram" src="https://img.shields.io/badge/chat-telegram-blue.svg?logo=telegram&style=flat-square"/></a>
+  <a href="https://github.com/Sliverkiss/mimocode2api/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/Sliverkiss/mimocode2api?color=yellow&style=flat-square&logo=github"></a>
+  <a href="https://github.com/Sliverkiss/mimocode2api/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/License-MIT-green.svg?style=flat-square"></a>
+  <img alt="Go" src="https://img.shields.io/badge/Go-1.24-00ADD8?logo=go&style=flat-square">
+  <img alt="Docker" src="https://img.shields.io/badge/Docker-~12MB-2496ED?logo=docker&style=flat-square">
+  <a href="https://t.me/sliverkiss_blog"><img alt="Telegram" src="https://img.shields.io/badge/chat-telegram-blue.svg?logo=telegram&style=flat-square"></a>
 </p>
 
 ---

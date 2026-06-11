@@ -217,7 +217,7 @@ func ProxyHandler(chatURL, bootstrapURL, fingerprint string) http.HandlerFunc {
 				w.Write([]byte(`{"error":{"message":"Failed to read upstream response"}}`))
 				return
 			}
-			bodyStr := strings.TrimSpace(strings.TrimPrefix(string(respBody), "data:"))
+			bodyStr := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(respBody)), "data:"))
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(resp.StatusCode)
 			w.Write([]byte(bodyStr))

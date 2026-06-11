@@ -4,8 +4,9 @@ services:
     container_name: mimo2api
     restart: unless-stopped
     ports:
-      - "${MIMO2API_PORT:-10000}:10000"
+      - "${MIMO2API_PORT:-10000}:${MIMO2API_PORT:-10000}"
     environment:
+      - MIMO2API_PORT=${MIMO2API_PORT:-10000}
       - API_KEY=${API_KEY:-}
       - MIMO_FREE_BASE_URL=${MIMO_FREE_BASE_URL:-https://api.xiaomimimo.com}
       - MIMO_FINGERPRINT=${MIMO_FINGERPRINT:-}

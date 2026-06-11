@@ -28,11 +28,9 @@ func main() {
 	}
 	log.Printf("Fingerprint: %s...", fingerprint[:16])
 
-	jwt, err := proxy.GetJWT(cfg.BootstrapPath, fingerprint)
-	if err != nil {
+	if _, err := proxy.GetJWT(cfg.BootstrapPath, fingerprint); err != nil {
 		log.Fatalf("Bootstrap failed: %v", err)
 	}
-	_ = jwt
 	log.Printf("JWT obtained, upstream=%s", cfg.UpstreamBase)
 	log.Printf("API Key: %s", cfg.APIKey)
 

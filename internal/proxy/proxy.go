@@ -36,8 +36,6 @@ type jwtCache struct {
 
 var cache jwtCache
 
-// GenerateFingerprint creates a device fingerprint matching MiMo-Code's implementation.
-// SHA256 of: hostname|platform|arch|cpu_model|username
 func GenerateFingerprint() string {
 	hostname, _ := os.Hostname()
 	cpu := detectCPU()
@@ -49,8 +47,7 @@ func GenerateFingerprint() string {
 		}
 	}
 	seed := fmt.Sprintf("%s|%s|%s|%s|%s", hostname, runtime.GOOS, runtime.GOARCH, cpu, username)
-	hash := sha256.Sum256([]byte(seed))
-	return fmt.Sprintf("%x", hash)
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(seed)))
 }
 
 func detectCPU() string {
@@ -85,9 +82,7 @@ func parseJWTExp(jwt string) int64 {
 	if err != nil {
 		return time.Now().Add(50 * time.Minute).UnixMilli()
 	}
-	var claims struct {
-		Exp int64 `json:"exp"`
-	}
+	var claims struct{ Exp int64 `json:"exp"` }
 	if json.Unmarshal(payload, &claims) != nil {
 		return time.Now().Add(50 * time.Minute).UnixMilli()
 	}
@@ -147,15 +142,13 @@ func invalidateJWT() {
 	cache.mu.Unlock()
 }
 
-type upstreamClient struct {
-	httpClient   *http.Client
-	chatURL      string
-	bootstrapURL string
-	fingerprint  string
+type chatClient struct {
+	httpClient *http.Client
+	chatURL    string
 }
 
 func ProxyHandler(chatURL, bootstrapURL, fingerprint string) http.HandlerFunc {
-	uc := &upstreamClient{
+	cc := &chatClient{
 		httpClient: &http.Client{
 			Timeout: 300 * time.Second,
 			Transport: &http.Transport{
@@ -164,9 +157,7 @@ func ProxyHandler(chatURL, bootstrapURL, fingerprint string) http.HandlerFunc {
 				IdleConnTimeout:     90 * time.Second,
 			},
 		},
-		chatURL:      chatURL,
-		bootstrapURL: bootstrapURL,
-		fingerprint:  fingerprint,
+		chatURL: chatURL,
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -176,54 +167,47 @@ func ProxyHandler(chatURL, bootstrapURL, fingerprint string) http.HandlerFunc {
 			return
 		}
 
-		// Read body with size limit
 		rawBody, err := io.ReadAll(io.LimitReader(r.Body, maxBodySize))
 		r.Body.Close()
 		if err != nil {
 			http.Error(w, `{"error":{"message":"Failed to read body"}}`, http.StatusBadRequest)
 			return
 		}
-
 		body := rewriteModelField(rawBody)
 
-		// Make request with JWT retry
-		resp, err := uc.doRequest(r, body, jwt)
+		resp, err := cc.doRequest(r, body, jwt)
 		if err != nil {
 			http.Error(w, `{"error":{"message":"Upstream error"}}`, http.StatusBadGateway)
 			return
 		}
-		defer resp.Body.Close()
 
-		// On 401/403, retry with fresh JWT
 		if resp.StatusCode == 401 || resp.StatusCode == 403 {
+			resp.Body.Close()
 			invalidateJWT()
 			jwt, err = GetJWT(bootstrapURL, fingerprint)
 			if err != nil {
 				http.Error(w, `{"error":{"message":"JWT refresh failed"}}`, http.StatusBadGateway)
 				return
 			}
-			resp.Body.Close()
-			resp, err = uc.doRequest(r, body, jwt)
+			resp, err = cc.doRequest(r, body, jwt)
 			if err != nil {
 				http.Error(w, `{"error":{"message":"Upstream error"}}`, http.StatusBadGateway)
 				return
 			}
-			defer resp.Body.Close()
 		}
+		defer resp.Body.Close()
 
-		// Copy headers
 		for key, values := range resp.Header {
 			for _, v := range values {
 				w.Header().Add(key, v)
 			}
 		}
 
-		contentType := resp.Header.Get("Content-Type")
-		isStream := strings.Contains(contentType, "text/event-stream")
-
-		if isStream {
+		if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
 			w.WriteHeader(resp.StatusCode)
-			io.Copy(w, resp.Body)
+			if _, err := io.Copy(w, resp.Body); err != nil {
+				log.Printf("[Proxy] Stream copy error: %v", err)
+			}
 		} else {
 			respBody, err := io.ReadAll(resp.Body)
 			if err != nil {
@@ -233,11 +217,7 @@ func ProxyHandler(chatURL, bootstrapURL, fingerprint string) http.HandlerFunc {
 				w.Write([]byte(`{"error":{"message":"Failed to read upstream response"}}`))
 				return
 			}
-			bodyStr := string(respBody)
-			if strings.HasPrefix(bodyStr, "data:") {
-				bodyStr = strings.TrimPrefix(bodyStr, "data:")
-				bodyStr = strings.TrimSpace(bodyStr)
-			}
+			bodyStr := strings.TrimSpace(strings.TrimPrefix(string(respBody), "data:"))
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(resp.StatusCode)
 			w.Write([]byte(bodyStr))
@@ -245,8 +225,8 @@ func ProxyHandler(chatURL, bootstrapURL, fingerprint string) http.HandlerFunc {
 	}
 }
 
-func (uc *upstreamClient) doRequest(r *http.Request, body []byte, jwt string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(r.Context(), "POST", uc.chatURL, bytes.NewReader(body))
+func (cc *chatClient) doRequest(r *http.Request, body []byte, jwt string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(r.Context(), "POST", cc.chatURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -255,7 +235,7 @@ func (uc *upstreamClient) doRequest(r *http.Request, body []byte, jwt string) (*
 	req.Header.Set("X-Mimo-Source", "mimocode-cli-free")
 	req.Header.Set("Accept", "text/event-stream, application/json")
 	req.Header.Set("User-Agent", randomUA())
-	return uc.httpClient.Do(req)
+	return cc.httpClient.Do(req)
 }
 
 var uaList = []string{
@@ -270,21 +250,30 @@ func randomUA() string {
 	return uaList[rand.Intn(len(uaList))]
 }
 
-// rewriteModelField strips the "provider/" prefix from the model field using proper JSON parsing.
-// "mimo/mimo-auto" → "mimo-auto"
+// chatRequest is a minimal struct for parsing only the model field.
+type chatRequest struct {
+	Model string `json:"model"`
+}
+
 func rewriteModelField(body []byte) []byte {
-	var req map[string]interface{}
+	var req chatRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		return body // not JSON, pass through
-	}
-	if model, ok := req["model"].(string); ok {
-		if idx := strings.LastIndex(model, "/"); idx >= 0 {
-			req["model"] = model[idx+1:]
-		}
-	}
-	result, err := json.Marshal(req)
-	if err != nil {
 		return body
 	}
-	return result
+	if idx := strings.LastIndex(req.Model, "/"); idx >= 0 {
+		req.Model = req.Model[idx+1:]
+		// Marshal just the model field back into the original JSON.
+		// Use a map to preserve all fields.
+		var full map[string]json.RawMessage
+		if err := json.Unmarshal(body, &full); err != nil {
+			return body
+		}
+		full["model"] = json.RawMessage(`"` + req.Model + `"`)
+		result, err := json.Marshal(full)
+		if err != nil {
+			return body
+		}
+		return result
+	}
+	return body
 }

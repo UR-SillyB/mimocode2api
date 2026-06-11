@@ -11,5 +11,5 @@ WORKDIR /app
 COPY --from=builder /build/mimo2api .
 EXPOSE 10000
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD wget -qO- http://localhost:10000/health || exit 1
+    CMD wget -qO- http://localhost:${MIMO2API_PORT:-10000}/health || exit 1
 CMD ["./mimo2api"]

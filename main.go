@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/Sliverkiss/mimocode2api/internal/config"
 	"github.com/Sliverkiss/mimocode2api/internal/handler"
@@ -56,8 +58,12 @@ func main() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		<-sigCh
-		log.Println("Shutting down...")
-		server.Close()
+		log.Println("Shutting down gracefully...")
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			log.Printf("Shutdown error: %v", err)
+		}
 	}()
 
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {

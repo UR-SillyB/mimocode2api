@@ -225,7 +225,14 @@ func ProxyHandler(chatURL, bootstrapURL, fingerprint string) http.HandlerFunc {
 			w.WriteHeader(resp.StatusCode)
 			io.Copy(w, resp.Body)
 		} else {
-			respBody, _ := io.ReadAll(resp.Body)
+			respBody, err := io.ReadAll(resp.Body)
+			if err != nil {
+				log.Printf("[Proxy] Failed to read non-stream body: %v", err)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadGateway)
+				w.Write([]byte(`{"error":{"message":"Failed to read upstream response"}}`))
+				return
+			}
 			bodyStr := string(respBody)
 			if strings.HasPrefix(bodyStr, "data:") {
 				bodyStr = strings.TrimPrefix(bodyStr, "data:")

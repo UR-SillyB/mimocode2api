@@ -50,7 +50,13 @@ func main() {
 	addr := fmt.Sprintf("%s:%d", cfg.BindHost, cfg.Port)
 	log.Printf("Listening on %s", addr)
 
-	server := &http.Server{Addr: addr, Handler: mux}
+	server := &http.Server{
+		Addr:         addr,
+		Handler:      mux,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 300 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
 
 	go func() {
 		sigCh := make(chan os.Signal, 1)

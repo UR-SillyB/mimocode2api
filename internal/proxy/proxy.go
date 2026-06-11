@@ -19,9 +19,10 @@ import (
 )
 
 const (
-	jwtRefreshBuffer = 5 * time.Minute
-	bootstrapTimeout = 15 * time.Second
-	maxBodySize      = 1 << 20 // 1MB
+	jwtRefreshBuffer   = 5 * time.Minute
+	bootstrapTimeout   = 15 * time.Second
+	maxBodySize        = 1 << 20 // 1MB
+	maxResponseBody    = 5 << 20 // 5MB
 )
 
 type bootstrapResponse struct {
@@ -91,7 +92,10 @@ func parseJWTExp(jwt string) int64 {
 
 func Bootstrap(bootstrapURL, fingerprint string) (string, error) {
 	client := &http.Client{Timeout: bootstrapTimeout}
-	body, _ := json.Marshal(map[string]string{"client": fingerprint})
+	body, err := json.Marshal(map[string]string{"client": fingerprint})
+	if err != nil {
+		return "", fmt.Errorf("bootstrap marshal: %w", err)
+	}
 	resp, err := client.Post(bootstrapURL, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("bootstrap: %w", err)
@@ -209,7 +213,7 @@ func ProxyHandler(chatURL, bootstrapURL, fingerprint string) http.HandlerFunc {
 				log.Printf("[Proxy] Stream copy error: %v", err)
 			}
 		} else {
-			respBody, err := io.ReadAll(resp.Body)
+			respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
 			if err != nil {
 				log.Printf("[Proxy] Failed to read non-stream body: %v", err)
 				w.Header().Set("Content-Type", "application/json")

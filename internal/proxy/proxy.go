@@ -251,24 +251,45 @@ func ProxyHandler(chatURL, bootstrapURL, fingerprint string) http.HandlerFunc {
 		if clientStream {
 			w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-cache")
-			w.Header().Set("Connection", "keep-alive")
 			w.Header().Set("X-Accel-Buffering", "no")
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 			w.WriteHeader(resp.StatusCode)
 
-			n, err := io.Copy(w, resp.Body)
-			if err != nil && !isExpectedStreamError(err) {
-				log.Printf("[Proxy] Stream copy error after %d bytes: %v", n, err)
-			} else if err == nil {
-				log.Printf("[Proxy] Stream completed, %d bytes written", n)
-			}
-			// If isExpectedStreamError, client disconnected — normal, don't log
-
-			// Ensure all buffered bytes are flushed to the client before the
-			// handler returns — otherwise the last SSE chunk may be delayed.
-			if flusher, ok := w.(http.Flusher); ok {
+			flusher, canFlush := w.(http.Flusher)
+			if canFlush {
 				flusher.Flush()
 			}
+
+			n, err := io.Copy(w, resp.Body)
+			if err != nil {
+				if isExpectedStreamError(err) {
+					// Client disconnected - log for diagnostics but not as error
+					log.Printf("[Proxy] ⚠️  Client disconnected after %d bytes: %v", n, err)
+				} else {
+					log.Printf("[Proxy] ❌ Stream copy error after %d bytes: %v", n, err)
+				}
+			} else {
+				log.Printf("[Proxy] ✅ Stream completed, %d bytes written", n)
+			}
+
+			// Always inject the SSE termination marker so clients receive
+			// a clean end-of-stream signal. Without this, clients that rely
+			// on [DONE] to transition from "streaming" to "completed" will
+			// see a cancelled/incomplete request instead.
+			written, writeErr := fmt.Fprintf(w, "data: [DONE]\n\n")
+			if writeErr != nil {
+				log.Printf("[Proxy] ⚠️  Failed to write [DONE] marker (%d bytes written): %v (client likely disconnected)", written, writeErr)
+			} else {
+				log.Printf("[Proxy] 🏁 [DONE] marker sent successfully")
+			}
+			if canFlush {
+				flusher.Flush()
+			}
+
+			// Give the client a small buffer window (50ms) to read the [DONE] marker
+			// before the connection is closed. This mitigates race conditions where
+			// the TCP FIN arrives before the application layer processes [DONE].
+			time.Sleep(50 * time.Millisecond)
 		} else {
 			aggregateSSE(w, resp.Body, resp.StatusCode)
 		}
@@ -370,9 +391,22 @@ func aggregateSSE(w http.ResponseWriter, body io.Reader, statusCode int) {
 		resp["usage"] = json.RawMessage(usage)
 	}
 
+	// Pre-encode to a buffer so we can set Content-Length for better client compatibility
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(resp); err != nil {
+		log.Printf("[Proxy] Failed to encode non-stream response: %v", err)
+		http.Error(w, `{"error":{"message":"Failed to encode response"}}`, http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", buf.Len()))
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(resp)
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		log.Printf("[Proxy] Failed to write non-stream response: %v", err)
+	} else {
+		log.Printf("[Proxy] ✅ Non-stream response sent (%d bytes)", buf.Len())
+	}
 }
 
 // SSEScanner wraps a bufio.Scanner for reading SSE lines.

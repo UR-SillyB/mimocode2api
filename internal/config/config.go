@@ -17,6 +17,7 @@ type Config struct {
 	ChatPath      string
 	Fingerprint   string
 	Debug         bool
+	ModelAliases  []string // Vision model aliases exposed to clients
 }
 
 func Load() *Config {
@@ -35,6 +36,7 @@ func Load() *Config {
 		ChatPath:      base + "/api/free-ai/openai/chat",
 		Fingerprint:   os.Getenv("MIMO_FINGERPRINT"),
 		Debug:         getEnvBool("MIMO2API_DEBUG", false),
+		ModelAliases:  parseModelAliases(getEnv("MODEL_ALIASES", "gpt-4o,gpt-4o-mini")),
 	}
 }
 
@@ -69,4 +71,17 @@ func getEnvBool(key string, fallback bool) bool {
 		return false
 	}
 	return fallback
+}
+
+func parseModelAliases(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var aliases []string
+	for _, name := range strings.Split(s, ",") {
+		if trimmed := strings.TrimSpace(name); trimmed != "" {
+			aliases = append(aliases, trimmed)
+		}
+	}
+	return aliases
 }

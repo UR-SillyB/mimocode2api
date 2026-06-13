@@ -43,7 +43,7 @@ func main() {
 		BootstrapURL: cfg.BootstrapPath,
 		Fingerprint:  fingerprint,
 	}))
-	apiMux.HandleFunc("/v1/models", handler.Models())
+	apiMux.HandleFunc("/v1/models", handler.Models(cfg))
 
 	mux.Handle("/v1/", middleware.Auth(cfg.APIKey)(apiMux))
 

@@ -182,7 +182,7 @@ func ProxyHandler(chatURL, bootstrapURL, fingerprint string) http.HandlerFunc {
 				MaxIdleConns:          50,
 				MaxIdleConnsPerHost:   20,
 				IdleConnTimeout:       90 * time.Second,
-				ResponseHeaderTimeout: 30 * time.Second,
+				ResponseHeaderTimeout: 15 * time.Second,
 			},
 		},
 		chatURL: chatURL,
@@ -215,7 +215,7 @@ func ProxyHandler(chatURL, bootstrapURL, fingerprint string) http.HandlerFunc {
 
 		resp, err := cc.doRequest(r.Context(), body, jwt)
 		if err != nil {
-			http.Error(w, `{"error":{"message":"Upstream error"}}`, http.StatusBadGateway)
+			writeUpstreamError(w, r, err)
 			return
 		}
 
@@ -229,11 +229,22 @@ func ProxyHandler(chatURL, bootstrapURL, fingerprint string) http.HandlerFunc {
 			}
 			resp, err = cc.doRequest(r.Context(), body, jwt)
 			if err != nil {
-				http.Error(w, `{"error":{"message":"Upstream error"}}`, http.StatusBadGateway)
+				writeUpstreamError(w, r, err)
 				return
 			}
 		}
 		defer resp.Body.Close()
+
+		// Upstream returned a non-200 error (rate-limit 429, 5xx, etc.). Surface
+		// it to the client directly instead of trying to parse it as an SSE
+		// stream — otherwise non-streaming clients get an empty body on 429.
+		if resp.StatusCode != http.StatusOK {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(resp.StatusCode)
+			n, _ := io.Copy(w, io.LimitReader(resp.Body, maxResponseBody))
+			log.Printf("[Proxy] Upstream returned %d (%d bytes forwarded)", resp.StatusCode, n)
+			return
+		}
 
 		// The upstream always returns SSE. If the client asked for non-streaming,
 		// aggregate the SSE chunks into a single JSON object.
@@ -415,6 +426,21 @@ func (cc *chatClient) doRequest(ctx context.Context, body []byte, jwt string) (*
 	req.Header.Set("User-Agent", "mimocode/0.1.0 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14")
 	req.Header.Set("x-session-affinity", generateSessionAffinity())
 	return cc.httpClient.Do(req)
+}
+
+// writeUpstreamError maps an upstream-request failure to a client-facing
+// response. A client disconnect is silent; a timeout/rate-limit is a clear 502.
+func writeUpstreamError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, context.Canceled) {
+		// Client disconnected before the upstream responded — nothing to send.
+		return
+	}
+	log.Printf("[Proxy] Upstream request failed: %v", err)
+	msg := "Upstream request failed — the upstream may be rate-limiting or temporarily unavailable"
+	if errors.Is(err, context.DeadlineExceeded) {
+		msg = "Upstream did not respond in time (rate-limited or unreachable)"
+	}
+	http.Error(w, fmt.Sprintf(`{"error":{"message":%q,"type":"upstream_error"}}`, msg), http.StatusBadGateway)
 }
 
 // Magic system prompt prefix required by the MiMo upstream.

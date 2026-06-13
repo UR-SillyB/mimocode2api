@@ -14,6 +14,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
@@ -32,14 +33,6 @@ const (
 type bootstrapResponse struct {
 	JWT string `json:"jwt"`
 }
-
-type jwtCache struct {
-	mu  sync.Mutex
-	jwt string
-	exp int64
-}
-
-var cache jwtCache
 
 func nodePlatform(goos string) string {
 	switch goos {
@@ -112,8 +105,8 @@ func parseJWTExp(jwt string) int64 {
 	return claims.Exp * 1000
 }
 
-func Bootstrap(bootstrapURL, fingerprint string) (string, error) {
-	client := &http.Client{Timeout: bootstrapTimeout}
+func Bootstrap(bootstrapURL, fingerprint, proxyURL string, proxyEnabled bool) (string, error) {
+	client := newHTTPClient(bootstrapTimeout, proxyURL, proxyEnabled)
 	body, err := json.Marshal(map[string]string{"client": fingerprint})
 	if err != nil {
 		return "", fmt.Errorf("bootstrap marshal: %w", err)
@@ -139,33 +132,117 @@ func Bootstrap(bootstrapURL, fingerprint string) (string, error) {
 	return result.JWT, nil
 }
 
-func GetJWT(bootstrapURL, fingerprint string) (string, error) {
-	cache.mu.Lock()
-	defer cache.mu.Unlock()
-
-	if cache.jwt != "" && cache.exp-time.Now().UnixMilli() > jwtRefreshBuffer.Milliseconds() {
-		return cache.jwt, nil
+// GenerateFingerprints generates n random hex-encoded fingerprints for
+// multi-instance/load-balancing scenarios.
+func GenerateFingerprints(n int) []string {
+	fps := make([]string, n)
+	b := make([]byte, 32)
+	for i := range fps {
+		cryptorand.Read(b)
+		fps[i] = hex.EncodeToString(b)
 	}
-
-	jwt, err := Bootstrap(bootstrapURL, fingerprint)
-	if err != nil {
-		if cache.jwt != "" {
-			log.Printf("[JWT] Bootstrap failed, using cached: %v", err)
-			return cache.jwt, nil
-		}
-		return "", err
-	}
-
-	cache.jwt = jwt
-	cache.exp = parseJWTExp(jwt)
-	log.Printf("[JWT] Bootstrapped, exp in %v", time.Until(time.UnixMilli(cache.exp)).Round(time.Second))
-	return jwt, nil
+	return fps
 }
 
-func invalidateJWT() {
-	cache.mu.Lock()
-	cache.jwt = ""
-	cache.mu.Unlock()
+// jwtPool manages a pool of JWT tokens, one per fingerprint, with
+// round-robin selection and lazy per-entry refresh.
+type JWTPool struct {
+	mu           sync.Mutex
+	entries      []JWTEntry
+	counter      uint64
+	proxyURL     string
+	proxyEnabled bool
+}
+
+type JWTEntry struct {
+	fingerprint string
+	jwt         string
+	exp         int64
+}
+
+func NewJWTPool(fingerprints []string, proxyURL string, proxyEnabled bool) *JWTPool {
+	entries := make([]JWTEntry, len(fingerprints))
+	for i, fp := range fingerprints {
+		entries[i] = JWTEntry{fingerprint: fp}
+	}
+	return &JWTPool{
+		entries:      entries,
+		proxyURL:     proxyURL,
+		proxyEnabled: proxyEnabled,
+	}
+}
+
+// Select picks the next JWT in round-robin, refreshing it via bootstrap
+// if expired or unset. Returns the JWT and its index (for invalidation).
+func (p *JWTPool) Select(bootstrapURL string) (jwt string, idx int, err error) {
+	p.mu.Lock()
+	idx = int(p.counter % uint64(len(p.entries)))
+	p.counter++
+	entry := &p.entries[idx]
+	if entry.jwt != "" && entry.exp-time.Now().UnixMilli() > jwtRefreshBuffer.Milliseconds() {
+		jwt = entry.jwt
+		p.mu.Unlock()
+		return
+	}
+	fp := entry.fingerprint
+	p.mu.Unlock()
+
+	// Refresh this entry
+	jwt, err = Bootstrap(bootstrapURL, fp, p.proxyURL, p.proxyEnabled)
+	if err != nil {
+		p.mu.Lock()
+		if p.entries[idx].jwt != "" {
+			jwt = p.entries[idx].jwt
+			p.mu.Unlock()
+			return jwt, idx, nil
+		}
+		p.mu.Unlock()
+		return "", idx, err
+	}
+
+	p.mu.Lock()
+	p.entries[idx].jwt = jwt
+	p.entries[idx].exp = parseJWTExp(jwt)
+	p.mu.Unlock()
+
+	log.Printf("[JWT] Bootstrapped fingerprint[%d], exp in %v", idx, time.Until(time.UnixMilli(parseJWTExp(jwt))).Round(time.Second))
+	return jwt, idx, nil
+}
+
+// Invalidate marks entry idx as expired so the next Select triggers a
+// fresh bootstrap (used on 401/403 from upstream).
+func (p *JWTPool) Invalidate(idx int) {
+	p.mu.Lock()
+	p.entries[idx].jwt = ""
+	p.mu.Unlock()
+}
+
+// newHTTPClient creates an http.Client with optional proxy support.
+// When a proxy is configured, keep-alives are disabled so each request
+// opens a new TCP connection — needed for Clash-style load balancers
+// to distribute across different exit nodes.
+func newHTTPClient(timeout time.Duration, proxyURL string, proxyEnabled bool) *http.Client {
+	transport := &http.Transport{
+		MaxIdleConns:          50,
+		MaxIdleConnsPerHost:   20,
+		IdleConnTimeout:       90 * time.Second,
+		ResponseHeaderTimeout: 15 * time.Second,
+	}
+
+	if proxyURL != "" {
+		if u, err := url.Parse(proxyURL); err == nil {
+			transport.Proxy = http.ProxyURL(u)
+		}
+		transport.DisableKeepAlives = true
+	} else if proxyEnabled {
+		transport.Proxy = http.ProxyFromEnvironment
+		transport.DisableKeepAlives = true
+	}
+
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+	}
 }
 
 type chatClient struct {
@@ -173,25 +250,16 @@ type chatClient struct {
 	chatURL    string
 }
 
-func ProxyHandler(chatURL, bootstrapURL, fingerprint string) http.HandlerFunc {
+func ProxyHandler(chatURL, bootstrapURL string, pool *JWTPool) http.HandlerFunc {
 	cc := &chatClient{
-		httpClient: &http.Client{
-			// Timeout 设为 0：SSE 流式响应可能持续数分钟，全局超时会中途掐断
-			Timeout: 0,
-			Transport: &http.Transport{
-				MaxIdleConns:          50,
-				MaxIdleConnsPerHost:   20,
-				IdleConnTimeout:       90 * time.Second,
-				ResponseHeaderTimeout: 15 * time.Second,
-			},
-		},
-		chatURL: chatURL,
+		httpClient: newHTTPClient(0, pool.proxyURL, pool.proxyEnabled),
+		chatURL:    chatURL,
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		jwt, err := GetJWT(bootstrapURL, fingerprint)
+		jwt, idx, err := pool.Select(bootstrapURL)
 		if err != nil {
-			http.Error(w, `{"error":{"message":"JWT bootstrap failed"}}`, http.StatusBadGateway)
+			http.Error(w, `{"error":{"message":"JWT pool exhausted"}}`, http.StatusBadGateway)
 			return
 		}
 
@@ -221,8 +289,8 @@ func ProxyHandler(chatURL, bootstrapURL, fingerprint string) http.HandlerFunc {
 
 		if resp.StatusCode == 401 || resp.StatusCode == 403 {
 			resp.Body.Close()
-			invalidateJWT()
-			jwt, err = GetJWT(bootstrapURL, fingerprint)
+			pool.Invalidate(idx)
+			jwt, _, err = pool.Select(bootstrapURL)
 			if err != nil {
 				http.Error(w, `{"error":{"message":"JWT refresh failed"}}`, http.StatusBadGateway)
 				return

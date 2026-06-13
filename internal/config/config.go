@@ -9,15 +9,18 @@ import (
 )
 
 type Config struct {
-	Port          int
-	BindHost      string
-	APIKey        string
-	UpstreamBase  string
-	BootstrapPath string
-	ChatPath      string
-	Fingerprint   string
-	Debug         bool
-	ModelAliases  []string // Vision model aliases exposed to clients
+	Port             int
+	BindHost         string
+	APIKey           string
+	UpstreamBase     string
+	BootstrapPath    string
+	ChatPath         string
+	Fingerprint      string // Single fingerprint (legacy, takes precedence over count)
+	FingerprintCount int    // Number of random fingerprints to generate (default 5)
+	ProxyURL         string // Explicit proxy address, e.g. http://127.0.0.1:7890
+	ProxyEnabled     bool   // Use HTTP_PROXY/HTTPS_PROXY from environment
+	Debug            bool
+	ModelAliases     []string // Vision model aliases exposed to clients
 }
 
 func Load() *Config {
@@ -28,15 +31,18 @@ func Load() *Config {
 	}
 
 	return &Config{
-		Port:          getEnvInt("MIMO2API_PORT", 10000),
-		BindHost:      getEnv("BIND_HOST", "0.0.0.0"),
-		APIKey:        apiKey,
-		UpstreamBase:  base,
-		BootstrapPath: base + "/api/free-ai/bootstrap",
-		ChatPath:      base + "/api/free-ai/openai/chat",
-		Fingerprint:   os.Getenv("MIMO_FINGERPRINT"),
-		Debug:         getEnvBool("MIMO2API_DEBUG", false),
-		ModelAliases:  parseModelAliases(getEnv("MODEL_ALIASES", "gpt-4o,gpt-4o-mini")),
+		Port:             getEnvInt("MIMO2API_PORT", 10000),
+		BindHost:         getEnv("BIND_HOST", "0.0.0.0"),
+		APIKey:           apiKey,
+		UpstreamBase:     base,
+		BootstrapPath:    base + "/api/free-ai/bootstrap",
+		ChatPath:         base + "/api/free-ai/openai/chat",
+		Fingerprint:      os.Getenv("MIMO_FINGERPRINT"),
+		FingerprintCount: getEnvInt("MIMO_FINGERPRINT_COUNT", 5),
+		ProxyURL:         os.Getenv("MIMO_PROXY_URL"),
+		ProxyEnabled:     getEnvBool("MIMO_PROXY_ENABLED", false),
+		Debug:            getEnvBool("MIMO2API_DEBUG", false),
+		ModelAliases:     parseModelAliases(getEnv("MODEL_ALIASES", "gpt-4o,gpt-4o-mini")),
 	}
 }
 

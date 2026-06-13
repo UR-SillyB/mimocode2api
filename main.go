@@ -22,16 +22,24 @@ func main() {
 
 	cfg := config.Load()
 
-	fingerprint := cfg.Fingerprint
-	if fingerprint == "" {
-		fingerprint = proxy.GenerateFingerprint()
+	var fingerprints []string
+	if cfg.Fingerprint != "" {
+		fingerprints = []string{cfg.Fingerprint}
+		log.Printf("Fingerprint: %s...", cfg.Fingerprint[:16])
+	} else {
+		fingerprints = proxy.GenerateFingerprints(cfg.FingerprintCount)
+		log.Printf("Generated %d random fingerprint(s)", len(fingerprints))
+		for i, fp := range fingerprints {
+			log.Printf("  Fingerprint[%d]: %s...", i, fp[:16])
+		}
 	}
-	log.Printf("Fingerprint: %s...", fingerprint[:16])
-
-	if _, err := proxy.GetJWT(cfg.BootstrapPath, fingerprint); err != nil {
-		log.Fatalf("Bootstrap failed: %v", err)
+	pool := proxy.NewJWTPool(fingerprints, cfg.ProxyURL, cfg.ProxyEnabled)
+	log.Printf("JWT pool ready (%d entries), upstream=%s", len(fingerprints), cfg.UpstreamBase)
+	if cfg.ProxyURL != "" {
+		log.Printf("Proxy: %s (keep-alives disabled)", cfg.ProxyURL)
+	} else if cfg.ProxyEnabled {
+		log.Printf("Proxy: enabled via HTTP_PROXY/HTTPS_PROXY (keep-alives disabled)")
 	}
-	log.Printf("JWT obtained, upstream=%s", cfg.UpstreamBase)
 	log.Printf("API Key: %s", cfg.APIKey)
 
 	mux := http.NewServeMux()
@@ -41,7 +49,7 @@ func main() {
 	apiMux.HandleFunc("/v1/chat/completions", handler.ChatCompletions(handler.ProxyConfig{
 		ChatURL:      cfg.ChatPath,
 		BootstrapURL: cfg.BootstrapPath,
-		Fingerprint:  fingerprint,
+		Pool:         pool,
 	}))
 	apiMux.HandleFunc("/v1/models", handler.Models(cfg))
 

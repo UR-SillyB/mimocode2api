@@ -12,7 +12,7 @@ import (
 type ProxyConfig struct {
 	ChatURL      string
 	BootstrapURL string
-	Fingerprint  string
+	Pool         *proxy.JWTPool
 }
 
 func Models(cfg *config.Config) http.HandlerFunc {
@@ -29,7 +29,7 @@ func Models(cfg *config.Config) http.HandlerFunc {
 }
 
 func ChatCompletions(cfg ProxyConfig) http.HandlerFunc {
-	h := proxy.ProxyHandler(cfg.ChatURL, cfg.BootstrapURL, cfg.Fingerprint)
+	h := proxy.ProxyHandler(cfg.ChatURL, cfg.BootstrapURL, cfg.Pool)
 	return func(w http.ResponseWriter, r *http.Request) {
 		h(w, r)
 	}

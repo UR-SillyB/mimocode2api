@@ -25,7 +25,7 @@ import (
 const (
 	jwtRefreshBuffer   = 5 * time.Minute
 	bootstrapTimeout   = 15 * time.Second
-	maxBodySize        = 1 << 20 // 1MB
+	maxBodySize        = 32 << 20 // 32MB — vision inputs (base64 images) easily exceed 1MB
 	maxResponseBody    = 5 << 20 // 5MB
 )
 
@@ -213,7 +213,7 @@ func ProxyHandler(chatURL, bootstrapURL, fingerprint string) http.HandlerFunc {
 
 		body := normalizeBody(rawBody)
 
-		resp, err := cc.doRequest(body, jwt)
+		resp, err := cc.doRequest(r.Context(), body, jwt)
 		if err != nil {
 			http.Error(w, `{"error":{"message":"Upstream error"}}`, http.StatusBadGateway)
 			return
@@ -227,7 +227,7 @@ func ProxyHandler(chatURL, bootstrapURL, fingerprint string) http.HandlerFunc {
 				http.Error(w, `{"error":{"message":"JWT refresh failed"}}`, http.StatusBadGateway)
 				return
 			}
-			resp, err = cc.doRequest(body, jwt)
+			resp, err = cc.doRequest(r.Context(), body, jwt)
 			if err != nil {
 				http.Error(w, `{"error":{"message":"Upstream error"}}`, http.StatusBadGateway)
 				return
@@ -399,12 +399,11 @@ func generateSessionAffinity() string {
 	return "ses_" + hex.EncodeToString(b)
 }
 
-func (cc *chatClient) doRequest(body []byte, jwt string) (*http.Response, error) {
-	// Use context.Background() so the upstream request is independent of
-	// the client HTTP handler's lifecycle. The caller is responsible for
-	// reading and closing resp.Body.
-	ctx := context.Background()
-
+func (cc *chatClient) doRequest(ctx context.Context, body []byte, jwt string) (*http.Response, error) {
+	// Bind the upstream request to the client's request context so that when
+	// the client disconnects, reading from resp.Body returns promptly and the
+	// upstream connection is torn down instead of lingering until a write fails.
+	// The caller is responsible for reading and closing resp.Body.
 	req, err := http.NewRequestWithContext(ctx, "POST", cc.chatURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err

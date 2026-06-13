@@ -51,10 +51,12 @@ func main() {
 	log.Printf("Listening on %s", addr)
 
 	server := &http.Server{
-		Addr:         addr,
-		Handler:      mux,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 300 * time.Second,
+		Addr:        addr,
+		Handler:     mux,
+		ReadTimeout: 60 * time.Second,
+		// WriteTimeout set to 0 to support long-lived SSE streaming.
+		// The upstream request has its own 300s timeout via context.
+		WriteTimeout: 0,
 		IdleTimeout:  120 * time.Second,
 	}
 

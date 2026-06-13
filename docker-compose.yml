@@ -1,16 +1,28 @@
 services:
   mimo2api:
-    build: .
+    # 使用已构建的镜像（优先），如需本地构建则改为 build: .
+    image: ursillyb/mimocode2api:latest
     container_name: mimo2api
     restart: unless-stopped
     ports:
       - "${MIMO2API_PORT:-10000}:${MIMO2API_PORT:-10000}"
     environment:
+      # 服务端口（保持与 ports 一致）
       - MIMO2API_PORT=${MIMO2API_PORT:-10000}
-      - API_KEY=${API_KEY:-}
+      # API 密钥（必填，用于保护本地代理，建议设置复杂密钥）
+      - API_KEY=${API_KEY:-sk-change-me}
+      # MiMo 上游地址（一般无需修改）
       - MIMO_FREE_BASE_URL=${MIMO_FREE_BASE_URL:-https://api.xiaomimimo.com}
+      # 设备指纹（留空自动生成，建议保持为空）
       - MIMO_FINGERPRINT=${MIMO_FINGERPRINT:-}
+      # 调试日志
       - MIMO2API_DEBUG=${MIMO2API_DEBUG:-false}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:${MIMO2API_PORT:-10000}/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - mimo2api_net
 
